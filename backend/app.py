@@ -3,9 +3,16 @@ from flask_cors import CORS
 from game import Game
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 game_instance = None
+
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    return response
 
 @app.route('/start', methods=['POST'])
 def start():
@@ -21,7 +28,13 @@ def bet():
         return jsonify({"error": "Game not started"}), 400
     data = request.json
     multiplier = data.get("multiplier", 1)
-    return jsonify(game_instance.place_bet(multiplier))
+    result = game_instance.place_bet(multiplier)
+
+    if not result["success"]:
+        return jsonify({"error": result["message"]}), 400
+
+    return jsonify(result)
+
 
 @app.route('/deal_flop', methods=['GET'])
 def deal_flop():
@@ -76,6 +89,12 @@ def auto_resolve_after_bet():
         "balance": result["balance"],
         "winner": result["winner"]
     })
+
+@app.route('/check', methods=['POST'])
+def check():
+    if not game_instance:
+        return jsonify({"error": "Game not started"}), 400
+    return jsonify(game_instance.check())
 
 if __name__ == '__main__':
     app.run(debug=True)

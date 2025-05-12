@@ -45,6 +45,7 @@ class Game:
         self.community_cards = []
         self.action_stage = "pre-flop"
         self.multiplier = 1
+        self.has_bet = {"pre-flop": False, "flop": False, "turn": False}
 
     def reset_for_new_hand(self):
         self.displayed_cards = {}
@@ -54,15 +55,22 @@ class Game:
         self.pot = self.blind
         self.action_stage = "pre-flop"
         self.multiplier = 1
+        self.has_bet = {"pre-flop": False, "flop": False, "turn": False}
 
     def start_hand(self):
         self.reset_for_new_hand()
+
+        if self.player.buyIn < self.blind:
+            return {"error": "Insufficient balance to start a new hand."}
+
         self.player.hand = [self.player.get_cards(self.displayed_cards), self.player.get_cards(self.displayed_cards)]
         self.dealer.hand = [self.dealer.get_cards(self.displayed_cards), self.dealer.get_cards(self.displayed_cards)]
         self.player.buyIn -= self.blind
+        self.action_stage = "pre-flop"
+
         return {
             "player_hand": self.player.hand,
-            "dealer_hand": self.dealer.hand,
+            "dealer_hand": [],
             "balance": self.player.buyIn,
             "pot": self.pot,
             "stage": self.action_stage
@@ -71,13 +79,62 @@ class Game:
     def place_bet(self, multiplier):
         amount = multiplier * self.ante
         success = self.player.place_bet(amount)
-        if success:
-            self.pot += amount
+        if not success:
+            return {
+                "success": False,
+                "message": "Not enough balance"
+            }
+
+        self.pot += amount
+        self.has_bet[self.action_stage] = True
+
+        if len(self.community_cards) < 3:
+            self.deal_flop()
+        while len(self.community_cards) < 5:
+            self.deal_turn_or_river()
+
+        self.action_stage = "complete"
+
+        result = self.determine_winner()
+
         return {
-            "success": success,
+            "success": True,
             "pot": self.pot,
-            "balance": self.player.buyIn
+            "balance": self.player.buyIn,
+            "player_hand": self.player.hand,
+            "dealer_hand": self.dealer.hand,
+            "community_cards": self.community_cards,
+            "winner": result["winner"]
         }
+
+    def check(self):
+        if self.action_stage == "river" or self.has_bet.get(self.action_stage):
+            return {"error": "Cannot check at this stage."}
+
+        if self.action_stage == "pre-flop":
+            cards = self.deal_flop()
+            self.action_stage = "flop"
+            return {"cards": cards, "stage": self.action_stage}
+
+        elif self.action_stage == "flop":
+            card = self.deal_turn_or_river()
+            return {"card": card, "stage": self.action_stage}
+
+        elif self.action_stage == "turn":
+            card = self.deal_turn_or_river()
+            self.action_stage = "complete"
+            result = self.determine_winner()
+            return {
+                "card": card,
+                "stage": "complete",
+                "dealer_hand": self.dealer.hand,
+                "player_hand": self.player.hand,
+                "community_cards": self.community_cards,
+                "winner": result["winner"],
+                "balance": result["balance"]
+            }
+
+        return {"error": "Invalid check."}
 
     def deal_flop(self):
         for _ in range(3):
@@ -91,6 +148,8 @@ class Game:
         self.community_cards.append(card)
         if len(self.community_cards) == 5:
             self.action_stage = "river"
+        else:
+            self.action_stage = "turn"
         return card
 
     def fold(self):
@@ -99,47 +158,56 @@ class Game:
     def evaluate_hand(self, hand):
         values = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8,
                   '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14}
-        sorted_hand = sorted([values[card[0]] for card in hand], reverse=True)
+        sorted_vals = sorted([values[card[0]] for card in hand], reverse=True)
         suits = [card[1] for card in hand]
-        value_counts = Counter(sorted_hand)
+        value_counts = Counter(sorted_vals)
+        unique_vals = list(set(sorted_vals))
         is_flush = len(set(suits)) == 1
-        is_straight = len(value_counts) == 5 and (max(sorted_hand) - min(sorted_hand) == 4)
+        is_straight = len(unique_vals) == 5 and max(unique_vals) - min(unique_vals) == 4
+        is_royal = sorted_vals == [14, 13, 12, 11, 10]
+
         self.multiplier = 1
 
-        if is_straight and is_flush:
+        if is_flush and is_royal:
             self.multiplier = 20
-            return (8, max(sorted_hand))
-        if 4 in value_counts.values():
+            return (9, sorted_vals)  # Royal Flush
+        if is_flush and is_straight:
             self.multiplier = 10
-            return (7, max(k for k, v in value_counts.items() if v == 4))
-        if 3 in value_counts.values() and 2 in value_counts.values():
+            return (8, sorted_vals)  # Straight Flush
+        if 4 in value_counts.values():
             self.multiplier = 5
-            return (6, max(k for k, v in value_counts.items() if v == 3))
+            quad = [k for k, v in value_counts.items() if v == 4]
+            return (7, quad + sorted_vals)
+        if 3 in value_counts.values() and 2 in value_counts.values():
+            self.multiplier = 4
+            triple = [k for k, v in value_counts.items() if v == 3]
+            return (6, triple + sorted_vals)
         if is_flush:
             self.multiplier = 3
-            return (5, sorted_hand)
+            return (5, sorted_vals)
         if is_straight:
-            self.multiplier = 1
-            return (4, max(sorted_hand))
+            self.multiplier = 2
+            return (4, sorted_vals)
         if 3 in value_counts.values():
-            self.multiplier = 1
-            return (3, max(k for k, v in value_counts.items() if v == 3))
+            triple = [k for k, v in value_counts.items() if v == 3]
+            return (3, triple + sorted_vals)
         if list(value_counts.values()).count(2) == 2:
-            self.multiplier = 1
-            return (2, max(k for k, v in value_counts.items() if v == 2))
+            pairs = [k for k, v in value_counts.items() if v == 2]
+            return (2, sorted(pairs, reverse=True) + sorted_vals)
         if 2 in value_counts.values():
-            self.multiplier = 1
-            return (1, max(k for k, v in value_counts.items() if v == 2))
-        return (0, max(sorted_hand))
+            pair = [k for k, v in value_counts.items() if v == 2]
+            return (1, pair + sorted_vals)
+        return (0, sorted_vals)
 
     def determine_winner(self):
-        player_best = self.evaluate_hand(self.player.hand + self.community_cards)
-        dealer_best = self.evaluate_hand(self.dealer.hand + self.community_cards)
+        player_hand_value = self.evaluate_hand(self.player.hand + self.community_cards)
+        dealer_hand_value = self.evaluate_hand(self.dealer.hand + self.community_cards)
 
-        if player_best > dealer_best:
-            self.player.buyIn += self.pot * self.multiplier
+        if player_hand_value > dealer_hand_value:
+            payout = self.pot * self.multiplier
+            self.player.buyIn += payout
             return {"winner": "player", "balance": self.player.buyIn}
-        elif dealer_best > player_best:
+        elif dealer_hand_value > player_hand_value:
             return {"winner": "dealer", "balance": self.player.buyIn}
         else:
             self.player.buyIn += self.pot - self.blind
