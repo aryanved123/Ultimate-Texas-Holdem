@@ -46,6 +46,7 @@ class Game:
         self.action_stage = "pre-flop"
         self.multiplier = 1
         self.has_bet = {"pre-flop": False, "flop": False, "turn": False}
+        self.player_bet_total = 0
 
     def reset_for_new_hand(self):
         self.displayed_cards = {}
@@ -56,6 +57,7 @@ class Game:
         self.action_stage = "pre-flop"
         self.multiplier = 1
         self.has_bet = {"pre-flop": False, "flop": False, "turn": False}
+        self.player_bet_total = 0
 
     def start_hand(self):
         self.reset_for_new_hand()
@@ -86,6 +88,7 @@ class Game:
             }
 
         self.pot += amount
+        self.player_bet_total += amount
         self.has_bet[self.action_stage] = True
 
         if len(self.community_cards) < 3:
@@ -203,12 +206,14 @@ class Game:
         player_hand_value = self.evaluate_hand(self.player.hand + self.community_cards)
         dealer_hand_value = self.evaluate_hand(self.dealer.hand + self.community_cards)
 
+        bonus = self.blind * self.multiplier
+
         if player_hand_value > dealer_hand_value:
-            payout = self.pot * self.multiplier
+            payout = self.player_bet_total + self.player_bet_total + bonus
             self.player.buyIn += payout
             return {"winner": "player", "balance": self.player.buyIn}
         elif dealer_hand_value > player_hand_value:
             return {"winner": "dealer", "balance": self.player.buyIn}
         else:
-            self.player.buyIn += self.pot - self.blind
+            self.player.buyIn += self.player_bet_total + self.blind
             return {"winner": "tie", "balance": self.player.buyIn}
